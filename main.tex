@@ -1,5 +1,5 @@
 \documentclass[12pt]{iopart}
-\newcommand{\gguide}{{\it Preparing graphics for IOP journals}}
+%\newcommand{\gguide}{{\it Preparing graphics for IOP journals}}
 \usepackage{listings}
 \usepackage{minted}
 \usepackage{subfig}
@@ -8,6 +8,7 @@
 \usepackage{subcaption}
 \usepackage[utf8]{inputenc}
 \usepackage{tikz}
+\usepackage[labelfont=bf]{caption}
 
 \newminted{cpp}{gobble=2, numbersep=3pt, escapeinside=||, xleftmargin=5mm, framesep=2mm, frame=leftline, baselinestretch=1, fontsize=\scriptsize, linenos=true}
 \newmintinline{cpp}{}
@@ -75,19 +76,91 @@
 \title{Migrating large codebases to C++ Modules}
 
 \author{Yuka Takahashi [1], Oksana Shadura [2], Vassil Vassilev [3]}
-\address{[1] the University of Tokyo, [2] CERN, [3] Princeton University}
+\address{[1] University of Tokyo, [2] University of Nebraska-Lincoln, [3] Princeton University}
 \ead{[1] yukatkh@is.s.u-tokyo.ac.jp, [2] oksana.shadura@cern.ch, [3] vvassilev@cern.ch}
 
 \begin{abstract}
 ROOT has several features which interact with libraries and require implicit header inclusion. This can be triggered by reading or writing data on disk, or user actions at the prompt. Often, the headers are immutable and reparsing is redundant. C++ Modules are designed to minimize the reparsing of the same header content by providing an efficient on-disk representation of C++ Code. ROOT has released a C++ Modules-aware technology preview which intends to become the default for the next release.
 
-In this contribution, we would like to summarize our ROOT experience migrating to C++ modules the codebase of ROOT. We outline the challenges for migration of the CMS software stack to use C++ modules, including integration of modules support in the build system while providing better functionality and correctness. We also give an insight of the continuous process of the improving performance bottlenecks for C++ modules and also evaluate the performance benefits that experiments are expected to achieve.
-
+In this paper, we will summarize our experience with migrating C++ Modules to LHC experiment's software code bases. We outline the challenges in C++ Modules migration of the CMS software, including integration of C++ Modules support in CMS build system. We also evaluate the performance benefits that experiments are expected to achieve.
 \end{abstract}
 
-\maketitle
-
 \section{Introduction}
+\label{intro}
+
+In High Energy Physics (HEP), experiments such as LHC [CITE] produces a large amount of data each seconds, and we expect to have even more data in Hi-lumi LHC [CITE] era. Thus software for HEP are always striving to archive the better performance, which will result in the reduction of costs in data centers as well as easing physicists waiting for their job to be processed.
+
+ROOT~\cite{root} is a core software used in High Energy Physics (HEP) for data analysis and simulation. As
+is supporting C++ Modules[CITE] since version 6.16. 
+
+The LLVM community advances its C++ Modules technology[CITE] providing an io-efficient, on-disk representation capable to reduce build times and peak memory usage.  The feature is standardized as a C++ technical specification and will be available in the C++20 standard. In short, C++ Modules is a mechanism to save the compiler state avoiding re-parsing of immutable header content.
+
+The cost of header re-parsing can be negligible in small to medium size codebases and very high in large codebases. Usually, the scalability issues arise at compile-time and do not affect the programs at runtime. However, ROOT is different -- its C++ interpreter processes code at program execution time and avoidance of redundant content re-parsing yields better performance.
+
+ROOT is a core component of many software stacks such as the CMS experiment software stack -- CMSSW[CITE]. In order to squeeze out every last bit of performance of the C++ Modules system in ROOT, non-invasive changes to the third party code is required. The goal of this paper is to enumerate such changes and to report progress with the "modularization" of CMSSW.
+
+The paper is devided into N sections: Introduction; ...
+
+%C++ Modules in general is a mechanism to speed-up the compilation time. For ROOT, is turns into the runtime as ROOT is using C++ Interpreter as its backend. We have implemented C++ Modules support in ROOT and presented at CHEP 2018 \ref{chep-Modules}. More progress has been made since then, and we will present the results of migration C++ Modules for CMSSW software stack.
+
+%As short overview of definitions used in this paper, well explained\ref{chep-Modules}, we would like to give a small introduction and description of benefits of C++ Modules. In C and in C++, the interface of a library is accessed by including the appropriate header files, like for example including STD <vector> header. There are several techniques to implement this feature. Textual Include, Precompiled Headers (PCH), and Modules. Textual include and PCH have some weak points, and Modules solves those problem.
+
+%Textual include is a copy-pasting. Each include is expanded to actual text by the preprocessor. The problem of the Textual Include is that it is expensive. As it is just copy pasting the header, parser has to reparse the same header again and again. Moreover, it is fragile. If a macro PI was defined in some library, including this library while using local variable PI will end up in an error.
+
+%PCH was invented as one of the solutions to textual include. It precompiles header files and store them in PCH file. However, it also has a weak point that it is not separable and monolithic, because the information is stored in one big file.
+
+%Thus C++ Modules was invented to solve above problems. C++ Modules pre-compiles headers, and it is not monolithic.
+
+\section{Background}
+
+\subsection{Understanding C++ Modules and what they improve in ROOT}
+\label{intro}
+
+C++ Modules represent the compiler internal state serialized on disk and deserialized on demand to avoid repetitions of parsing operations, as we have described in [CITE Modules PAPERS]. There are different implementations of the concept in Clang, GCC and MSVC. ROOT uses Clang through its interpreter Cling and adopts the C++ Modules implementation in Clang, which is one of the most sophisticated on the market as of today.
+
+Many operations in ROOT require loading a shared library and its corresponding header files. For example when we serialize or deserialize a ROOT file, ROOT needs to know which library contains how to stream the object. This meta information is widely known as a ROOT "dictionary" information. The dictionary is generated by a tool, \textit{rootcling}, which processes ROOT-aware code and produces a C++ source code file with a prefix \textit{G\_\_}. The file is later compiled and linked to the library it describes.
+
+Generally, there are two ways to load a library: implicitly or explicitly. Both models require the library description to be available before or no later than library loading time. That is, all header files describing the library should be processed by the interpreter blindly without knowing if they will be used. This is a severe performance bottleneck which ROOT addresses with several technologies: \textit{ROOTMAP}s, \textit{RDICT}s and a \textit{PCH}. The ROOTMAP file represents a lightweight version of the library descriptor containing forward declarations and their mapping to the corresponding library. The RDICT file represents a cache of the various \textit{TClass} objects which will be present when the library is loaded. The PCH file contains almost all of the headers in ROOT in an optimized form which is loaded at start up to avoid header re-parsing.
+
+The ROOTMAPs and RDICTs are home-grown fixes to the inherent PCH problem -- it is impossible to extend a PCH without fully recompiling it. C++ Modules the industry fix to this problem -- they represent composable PCH files called \textit{PCM}s.
+
+A PCM file is generated by rootcling using a special file containing the mapping between a header file and a module, called a \textit{modulemap} file. It describes how a collection of existing headers corresponds to the logical structure of a module. It is important to note that transitive includes not present in a modulemap file are duplicated. That is, if \textit{A.h} includes \textit{C.h}, \textit{B.h} includes \textit{C.h} and the modulemap maps A.h to module \textit{Alpha} and B.h to module \textit{Beta}, the content of C.h will be duplicated in both Modules. Such duplication can reduce performance dramatically and should be avoided at almost any cost. This important detail suggest that "modularization" should be done bottom-up, namely, starting from external dependencies onward.
+
+% put diagram for ROOT here
+%ROOT is using Clang API for C++ Modules implementation. Industry standard C++ Modules API is also implemented inside Clang, and we're calling them from Cling.
+
+%Cling is used from rootcling, which is a dictionary generator for ROOT. It creates dictionary files such as rootmap and rdict. ROOTMAP is a file which is mapping symbols and identifiers to libraries, so the when the definition of some symbols were missing, ROOT knows which libraries to load by looking at ROOTMAP files. RDICT file is efficiently storing information needed for serialization. It is an optimization for ROOT IO. ROOTMAP files and RDICTs are loaded and used at ROOT runtime.   
+
+%Next important definitions will be to define \textit{implicit} and \textit{explicit} PCMs, and the difference between them.
+
+
+%Let’s look into the content on modulemap. Modulemap is a definition file of headers, which is used to build a PCM in Clang. It should contain all interface headers which are used by other Modules. PCM size becomes large, and contains a lot of header duplications.
+
+%Explicit PCMs, on the other hand, are explicitly generate with module maps. It only includes headers defined in modulemap to PCMs, so it reduces the header duplication compared to implicit PCMs. 
+
+%Although implicit PCMs are easy to enable, it won’t give the performance benefit as much as explicit PCMs. For this reasin we enabled explicit PCMs in CMSSW.
+
+% put diagram for module maps here
+Let’s take a closer look to module map system. In the diagram X [FIXME:needs to be added] is shown organization of C++ Modules infrastructure together with module map system. Here circles corresponds to directories and squares corresponds to files. Imagine the top circle means root directory. As said, module map file needs to be placed where the header files exist. So in this example, it needs to know where the *.h header files exist.
+
+However, there is some problems in module map system.  For example, we want to enable C++ Modules for system headers. It means that for system headers, for example \textit{STL} and \textit{libc} module maps don’t exist by default. Thus we need to provide module map by ourselves. Module map system itself does not solve this complex situation, that’s why we need to introduce module map overlay file.
+
+Module map overlay file is generated at the configuration time and gives Clang the important information of the location of system headers and the relative path to \textit{stl} module map. System module maps, for example the \textit{stl} module map has a similar contents as \textit{module.modulemap}. From modulemap overlay file and \textit{stl.modulemap}, Clang combines those information and treat internally as it is modulemap existing in \textit{usr/include}. However, it also has the downside that it needs to be generated at the configuration time.
+
+\subsection{Overview of CMSSW}
+\label{cmssw}
+
+CMS \cite{cms} is one of the biggest experiment in LHC. The goal of this paper is to show the progress in \textit{modularization} of CMSSW in order to archive a performance improvement in CMSSW using C++ Modules technology. CMSSW utilizes their own build system, SCRAM [CITE]. SCRAM is a configuration management tool, a distribution system, a build system and resource manager, with local resources and applications managed in a transparent way. In addition it provides a common development environment for CMSSW developers.
+
+In CMSSW, SCRAM build system resolves library dependencies and executes and also C++ compiler such as gcc ROOT Genreflex, which is a wrapper of rootcling.
+Rootcling generates CMS ROOT dictionaries, rootmaps and RDICTs, as it was in ROOT. At the same time gcc compiles C++ files and generates CMS shared object libraries. 
+
+As was mentioned in the section \cite{intro}, one of important features to be adjusted is generation modulemaps. As you can imagine, modulemap could contain all interface header files in the end, and can be quite large and become hard to maintain by hand. This is why we need to autogenerate the module map, which will be explained in next slides.
+
+Autogeneration of module map is quite simple. CMSSW has interface headers, which is exposed to outside libraries. We automatically generate the modulemap by iterating through those interface headers. Modulemap needs to be generated before any execution of genreflex, so it needs to happen at configuration time of CMSSW.
+We rely on SCRAM for generation modulemap. This module map is used by Genreflex to generate CMS PCMs, and also at CMS runtime.
+
+In case of C++ Modules, Genreflex generates PCMs that will be loaded at the runtime of CMS. We have now this infrastructure working with PCMs, although not all of the CMS libraries are modularized. Migration to PCMs can be done incrementally, so it can co-exist with the current infrastructure.
 
 
 \begin{figure}[!h]
@@ -95,10 +168,10 @@ In this contribution, we would like to summarize our ROOT experience migrating t
   \begin{tikzpicture}[outer sep=0.05cm, node distance=0.8cm, scale=0.7, transform shape]
         
     \node[model, fill=my_lightblue, name=clang] (clang) {Clang};
-    \node[model, fill=my_purple, name=cling, right=0.5cm of clang] (cling) {Cling};
-    \node[model, fill=my_purple, name=rootcling, above=0.5cm of cling] (rootcling) {rootcling};
-    \node[model, fill=my_purple, name=dicts, right=0.5cm of rootcling] (dicts) {ROOT Dictionaries};
-    \node[model, fill=my_purple, name=root, right=4cm of cling] (root) {ROOT};
+    \node[model, fill=my_purple, name=cling, right=1cm of clang] (cling) {Cling};
+    \node[model, fill=my_purple, name=rootcling, above=1cm of cling] (rootcling) {rootcling};
+    \node[model, fill=my_purple, name=dicts, right=1cm of rootcling] (dicts) {ROOT Dictionaries};
+    \node[model, fill=my_purple, name=root, below=1cm of dicts] (root) {ROOT};
 
     \draw[line, ->] (clang.east) -- (cling);
     \draw[line, ->] (cling.north) -- (rootcling);
@@ -112,61 +185,116 @@ In this contribution, we would like to summarize our ROOT experience migrating t
 \end{figure}
 
 
-\begin{listing}[h]
-    \noindent
-    \begin{minipage}[h]{\textwidth}
-    \begin{cppcode*}{}
-// Foo.h
-    |\label{line:foobar}|namespace foo { struct bar{}; }
-    |\label{line:structs}|struct S{};
+%\begin{listing}[h]
+%    \noindent
+%    \begin{minipage}[h]{\textwidth}
+%    \begin{cppcode*}{}
+%// Foo.h
+%    |\label{line:foobar}|namespace foo { struct bar{}; }
+%    |\label{line:structs}|struct S{};
 
-// libFoo.rootmap
-    |\label{line:decls}|{ decls }
-    namespace foo { }
-    struct S;
- 
-    |\label{line:libfoo}|[ libFoo.so ]
-    # List of selected classes
-    class bar
-    struct S
+%// libFoo.rootmap
+%    |\label{line:decls}|{ decls }
+%    namespace foo { }
+%    struct S;
+% 
+%    |\label{line:libfoo}|[ libFoo.so ]
+%    # List of selected classes
+%    class bar
+%    struct S
 
-// G__Foo.cxx (aka libFoo dictionary)
-    namespace {
-      void TriggerDictionaryInitialization_libFoo_Impl() {
-        static const char* headers[] = {"Foo.h"}
-        // More scaffolding
-        extern int __Cling_Autoloading_Map;
-        namespace foo{struct __attribute__((annotate("$clingAutoload$Foo.h"))) bar;}
-        struct __attribute__((annotate("$clingAutoload$Foo.h"))) S;
-       // More initialization scaffolding.
-    }
-    \end{cppcode*}
-    \end{minipage}
-    \caption{Example of ROOT dictionary for libFoo.}
-    \label{list:foo}
-\end{listing}
+%// G__Foo.cxx (aka libFoo dictionary)
+%    namespace {
+%      void TriggerDictionaryInitialization_libFoo_Impl() {
+%        static const char* headers[] = {"Foo.h"}
+%        // More scaffolding
+%        extern int __Cling_Autoloading_Map;
+%        namespace foo{struct __attribute__((annotate("$clingAutoload$Foo.h"))) bar;}
+%        struct __attribute__((annotate("$clingAutoload$Foo.h"))) S;
+%       // More initialization scaffolding.
+%    }
+%    \end{cppcode*}
+%    \end{minipage}
+%    \caption{Example of ROOT dictionary for libFoo.}
+%    \label{list:foo}
+%\end{listing}
 
-\section{Background}
 
-\section{Implementation}
-\label{implementation}
+\section{Migration}
+\label{migration}
 
-An implementation of the C++ modules concept itself exists in the LLVM frontend Clang \cite{clang-modules-doc} which is used as a library by ROOT. Clang supports the Modules TS and hosts modules research and development work. Clang's implementation encourages incremental, bottom-up adoption of the C++ modules \cite{Smith-cppcon}. The implementation is designed to work for C, C++, ObjectiveC, ObjectiveC++ and Swift \cite{Moduralize-doc}. Users can enable the modules feature without modifications in header files. Clang allows users to specify module interfaces in a dedicated file, called module maps files. A module map file expresses the mapping between a module file and a collection of header files. It can be mounted using the compiler’s virtual file system overlay mechanism to non-writable library installation paths. In practice, a non-invasive modularization can be done easily by introducing a module map file. In some cases the module map files can be automatically generated if the build system knows about the list of header files in every package.
+Third-party code can work in mixed mode with ROOT with enabled C++ Modules. For instance, the dictionaries of CMSSW can use the old dictionary system while the dictionaries of ROOT use the new technology. Ultimately, this will not manifest into performance improvements because the C++ Modules technology intends to address dictionaries outside of the ROOT PCH, namely, in third-party software. The mixed mode support ensures an incremental migration path while having a stable system throughout the migration period. 
 
-Several steps were taken to adopt C++ modules in ROOT. First, we supported compiling ROOT with C++ modules. It halfed ROOT's compilation time. This effort includes generating module map files and resolving cyclic header dependency inside ROOT. Next, we taught rootcling dictionary generator to generate PCM files attached with I/O information. We taught ROOT to preload all PCMS at the startup time in order to make declaration available without \#including the appropriate headers. Also, we implemented the autoloading of libraries in ROOT which is not depending on old infrastructure (ROOTMAPS), which gives correctness benefits shown in section \ref{correctness} and is efficient compared to ROOTMAPS.
+This section describes the steps taken by CMSSW in order to migrate fully to C++ Modules. We mention a few items of work which are complete, a few which are ongoing and in both cases the work was conducted by the authors but with significant support of our colleagues mentioned in section \ref{ack}.
 
-For the C++ modules adoption in experiments, we have been working closely with CMSSW team \cite{cms}. ROOT can already be compiled with runtime C++ in CMS environment, and we will enable PCM generation for their libraries one by one. We can gradually migrate dictionary generation to PCM, as our current implementation falls back to ROOTMAP when a PCM is not generated. It enables us to incrementally migrate from the old to the new infrastructure.
+\subsection{Header Sanitizing}
+In most cases, a module corresponds to a single dictionary (or library). Each module enumerates every header file in a submodule. Each submodule needs to be able to compile in isolation. Illustratively, a separate compiler instance is run on each header file. This assumes that every header file should be able to compile on its own. \textit{Standalone} header files include what they use and are resilient to configuration macros.
 
-\section{Results}
+In the CMSSW codebase had a lot of header files inaccuracies thoroughly described in the GitHub C++ Modules Meta Issue~\cite{Modules-gh-metaissue}. The issues can be classified into the following categories:
+\begin{itemize}
+    \item Incomplete headers -- header files which do not include what they use. They are easy to fix because the C++ Modules system usually is able to suggest which are the omitted includes;
+    \item Broken headers -- header files which never compiled. Those header files were never included in any translation unit but were "part" of a library. They are easy to deprecate and remove;
+    \item Cyclic headers -- header files which include graph contains a cycle. For example, header \textit{A} includes header \textit{B} includes \textit{A}. Header \textit{A} is in module \textit{Alpha} and header \textit{B} in \textit{Beta}. Usually this is a signal for a layering violation -- concepts from one library depend on another an vice versa. In many cases, using forward declarations of such entities resolve the problem. In some cases more sophisticated engineering techniques are necessary, such as, refactoring, moving the two dependent headers together or splitting the common dependent logic into its own library and module
+\end{itemize}
+
+After sanitizing the header files a toolchain to protect regressions can be introduced. In CMSSW every header in a pull request is checked for the aforementioned issues. This is done by precompiling each header on its own. In future we will deploy the include graph sanitization tool which we used to detect include cycles~\cite{scram-cycle-break}.
+
+\subsection{Modularizing CMSSW}
+
+Modularizing CMSSW requires two steps: generating a modulemap file and enabling C++ Modules in \textit{rootcling}. The generation of modulemap file happens at configuration time where we produce a file describing each library as a module and each library header file as a submodule. This can be subtle in some build systems as it requires tracking of header files which usually is not required. SCRAM already supports this and it was trivial to synthesize that description. Enabling C++ Modules in rootcling is done by adding an extra \textit{-cxxmodule} flag. We started doing that gradually library-by-library to avoid unnecessary complications.
+
+\subsection{Modularizing External Dependencies}
+
+In order to fully see the expected performance benefits we should modularize external dependencies as well. An external dependency should be modularized if a module transitively includes it. For example if header \textit{A} from module \textit{Alpha} includes directly or indirectly \textit{$<$vector$>$}, the external library, \textit{libstdc++}, containing that file should be modularized.
+
+It can be challenging to modularize external dependencies. On the one hand it may be difficult to know what the modulemap file should contain. On the other hand because they can be in a non-writable locations on the file system. We have prepared a set of modulemap files for all external dependencies of CMSSW~\cite{raphael-auto-Modules}. The second challenge is solved a file which instructs rootcling to pretend that the modulemap file is located at the non-writable folder in the file system. The \textit{virtual file system overlay file} can be automatically synthesized by~\cite{raphael-auto-Modules}.
+
+
+\section{Preliminary Results}
 \label{results}
+FIXME: Explain we are still running in mixed mode.
+In \ref{fig:perf:a},\ref{fig:perf:b},\ref{fig:perf:c} and \ref{fig:perf:d} are shown results of benchmarks from CMSSW testing suite with enabled C++ Modules. On \ref{fig:perf:a} is shown a benchmark of ESetup Lock in Fast simulation test. ESetup is auxiliary information needed to process an Event. The left bar is ROOT Master, with no Modules. The middle bar is a ROOT with only ROOT PCMs, which means that we're not loading PCMs from CMSSW in this build. The right bar is ROOT PCMs + CMS PCMs, which is loading 121 PCMs in total. As you can see, CMS PCMs build runs 22.5 seconds better than ROOT Master.
 
-\subsection{Performance Results}
+\ref{fig:perf:b} is shown results of benchmark of ESetup Get in Fast simulation test. In this test, CMS PCMs build was 15.2 seconds fater than ROOT Master.
+\ref{fig:perf:c} is shown results of benchmark of CPU Total Loop in Digitization test. CMS PCMs build was 331 seconds faster than ROOT Master.
+\ref{fig:perf:d} is shown results of benchmark of RSS in Digitization test. CMS PCMs build had 143 MBytes worse RSS than ROOT Master.
+
+\begin{figure}
+\centering
+\begin{minipage}{.48\textwidth}
+\subfloat[] {\label{fig:perf:a} \includegraphics[width=\textwidth]{0.png}}
+\end{minipage}\hfill
+\begin{minipage}{.48\textwidth}
+\subfloat[] {\label{fig:perf:b} \includegraphics[width=\textwidth]{1.png}}
+\end{minipage}
+\begin{minipage}{.48\textwidth}
+\subfloat[] {\label{fig:perf:c} \includegraphics[width=\textwidth]{2.png}}
+\end{minipage}\hfill
+\begin{minipage}{.48\textwidth}
+\subfloat[] {\label{fig:perf:d} \includegraphics[width=\textwidth]{3.png}}
+ \end{minipage}
+ \caption{Performance results: (a) is the ESetup Lock RT time measurements. (b) is showing the ESetup RT  measurements. (c) is showing the 250199.18 CPU total loop measurements. (d) is showing the 500199.0 RSS measurements.}
+\label{fig:performance1}
+\end{figure}
+ 
+ The work presented in this article shows that C++ Modules technology were successfully implemented and tested in ROOT and CMSSW software framework. The work on performance improvement is still ongoing. C++ Modules will provide experiments a benefit of header modularity of libraries and performance improvement.
 
 \section{Limitations and Future work}
+\begin{enumerate}
+    \item Incremental builds -- building ROOT, modifying the source code and rebuilding might not work. To work around it remove all PCM files in the build folder.
+    \item Relocatability issues -- we have fixed a few of the relocatability issues we found. We are aware of an obscure relocatability issue when ROOT is copied in another folder and we are rebuild. ROOT picks up both modulemap files in seemingly distinct locations.
+    \item Building PCMs with rootcling -- in rare cases there might be issues when building PCM files with rootcling. The easiest will be to open a bug report to clang, however, reproducing a failure outside of rootcling is very difficult at the moment.
+    \item Generation of some dictionary hangs -- on some platforms (depending on the version of libstdc++) the generation of the dictionary goes in an infinite loop. 
+    \item Layering violations in some ROOT components.
+\end{enumerate}
+
 
 \section{Acknowledgments}
+\label{ack}
 
-This work has been supported by an Intel Parallel Computing Center grant, by U.S. National Science Foundation grants PHY-1450377, OAC-1450377 and PHY-1624356, and by the U.S. Department of Energy, Office of Science.
+This work has been supported by an Intel Parallel Computing Center grant, by U.S. National Science Foundation grants PHY-1450377, ACI-1450323 and PHY-1624356, and by the U.S. Department of Energy, Office of Science.
+
+The authors are thankful to Shahzad Malik Muzaffar and Mircho Rodozov from the CMSSW devops team.
 
 The authors would like to thank CERN/EP-SFT and the ROOT team in particular.
 
@@ -174,33 +302,26 @@ The authors would like to thank CERN/EP-SFT and the ROOT team in particular.
 \section*{References}
 
 \begin{thebibliography}{10}
+
+\bibitem{root}
+R. Brun, F. Rademakers, \textit{ROOT - An Object Oriented Data Analysis Framework}, Nucl. Inst. \& Meth. in Phys. Res. A  \textbf{389} (Proceedings AIHENP'96 Workshop,1997).
+
 \bibitem{vassil-paper}
 Vassil Vassilev, J. Phys.: Conf. Ser. \textbf{898}, 072023 (2017)
 
-\bibitem{clang-modules-doc}
-Clang Modules Documentation, \url{http://clang.llvm.org/docs/Modules.html}, accessed: 2018-24-11
-
-\bibitem{Moduralize-doc}
-Modularize Documentation, \url{http://clang.llvm.org/extra/modularize.html}, accessed: 2018-24-11
-
-\bibitem{Gregor-cppcon}
-Doug Gregor, cppCon 2016, Modules, URL \url{http://llvm.org/devmtg/2012-11/#talk6}
-
-\bibitem{Klimek-cppcon}
-Manuel Klimek, cppCon 2016, Deploying C++ Modules to 100s of Millions of Lines of Code, URL \url{https://cppcon2016.sched.com/event/7nM2/deploying-c-modules-to-100s-of-millions-of-lines-of-code}
-
-\bibitem{Smith-cppcon}
-Richard Smith, cppCon 2016, There and Back Again: An Incremental C++ Modules Design, URL \url{https://cppcon2016.sched.com/event/7nM6/there-and-back-again-an-incremental-c-modules-design}
-
-\bibitem{David-talk}
-David Blaikie, LLVM developer's meeting 2018, Build Impact of Explicit and C++ Standard Modules, URL \url{https://youtu.be/b-iiA18BRCQ}
-
-\bibitem{rootbench}
-Oksana Shadura, CHEP 2018 preprint, Continuous Performance Benchmarking Framework for ROOT
+\bibitem{chep-Modules}
+Yuka Takahashi and al., \textit{Continuous Performance Benchmarking Framework for ROOT}, CoRR, arXiv:1812.03992 [cs.PL]
 
 \bibitem{cms}
-CMS Collaboration, “The CMS experiment at the CERN LHC”, JINST 3 (2008) S08004. doi:10.1088/1748-0221/3/08/S08004.
+CMS Collaboration,\textit{CMS: The computing project. Technical design report}, CERN-LHCC-2005-023.
 
+
+\bibitem{Modules-gh-metaissue}
+CMSSW C++ Modules Meta Issue \url{https://github.com/cms-sw/cmssw/issues/15248} (visited May 2019)
+\bibitem{scram-cycle-break}
+Circle Break \url{https://github.com/Teemperor/circle-break} (visited May 2019)
+\bibitem{raphael-auto-Modules}
+ClangAutoModules \url{https://github.com/Teemperor/ClangAutoModules} (visited May 2019)
 \end{thebibliography}
 
 \end{document}
