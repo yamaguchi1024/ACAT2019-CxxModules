@@ -35,6 +35,7 @@
   model/.style = {draw, thick, fill=white, text centered, minimum height=3em, minimum width=4em, rounded corners, drop shadow},
   user/.style = {draw, thick, ellipse, fill=white, text centered, minimum height=3em, minimum width=5em, drop shadow},
   line/.style = {->, thick, color=black, shorten <=2pt, shorten >=2pt, >=stealth'},
+  dashedline/.style = {->, thick, dashed, color=black, shorten <=2pt, shorten >=2pt, >=stealth'},
   plain/.style = {minimum width=1em},
   %\draw [line, ->] (m1.north) ++(-15pt,-1pt) arc [start angle=-140, end angle=-400, radius=20pt] node[midway] {$T_{M_1}$} ;
   % This works around an issue with node[midway] http://tex.stackexchange.com/questions/38763/how-to-place-a-node-in-the-middle-of-an-arc                
@@ -92,9 +93,7 @@ In High Energy Physics (HEP), experiments such as LHC \cite{lhc} produces a larg
 
 ROOT~\cite{root} is a core software used in High Energy Physics (HEP) not only for data analysis, but also as a backend for larger LHC experiment's software such as CMSSW and ATLAS. Thus the performance improvement in ROOT will result in also improving experiment's software, which requires more resources than ROOT itself.
 
-C++ Modules \cite{vassil-paper} has been supported in ROOT since version 6.16, in order to improve its performance. The cost of header re-parsing can be negligible in small to medium size codebases and very high in large codebases. Usually, the scalability issues arise at compile-time and do not affect the programs at runtime. However, ROOT is different -- its C++ interpreter Cling processes code at program execution time and avoidance of redundant content re-parsing yields better runtime performance.
-
-The paper is divided as follows: Introduction; ...
+C++ Modules \cite{vassil-paper} has been supported in ROOT since version 6.16, in order to improve its performance. The cost of header re-parsing can be negligible in small to medium size codebases, but can be  high in larger codebases. Usually, the scalability issues arise at compile-time and do not affect the programs at runtime. However, ROOT is different -- its C++ interpreter Cling processes code at program execution time and avoidance of redundant content re-parsing yields better runtime performance.
 
 \section{Background}
 
@@ -177,16 +176,6 @@ Modularizing CMSSW requires two steps: generating a modulemap file and enabling 
 
 This section describes the steps taken in CMSSW in order to migrate fully to C++ Modules. We mention a few items of work which are complete, a few which are ongoing and in both cases the work was conducted by the authors but with significant support of our colleagues mentioned in section \ref{ack}.
 
-\subsection{Autogeneration of modulemap}
-% This section is probably the most important section in this paper, as all other experiments' librarian wants to know how they can modularize their software stack.
-
-% describe how scram generates modulemap here in deail. Also we can mention about classes.h
-As was mentioned in the section \ref{intro}, one of important features to be adjusted is generation modulemaps. As you can imagine, modulemap could contain all interface header files in the end, and can be quite large and become hard to maintain by hand. This is why we need to autogenerate the module map, which will be explained in next slides.
-
-Autogeneration of module map is quite simple. CMSSW has interface headers, which is exposed to outside libraries. We automatically generate the modulemap by iterating through those interface headers. Modulemap needs to be generated before any execution of genreflex, so it needs to happen at configuration time of CMSSW.
-We rely on SCRAM for generation modulemap. This module map is used by Genreflex to generate CMS PCMs, and also at CMS runtime.
-
-% FIXME: SCRAM already has a dependency list according to which it determines the order of genreflex execution. If a header was included in other modules without explicit dependency, it's a problem.
 \subsection{Header Sanitizing}
 In most cases, a module corresponds to a single dictionary (or library). Each module enumerates every header file in a submodule. Each submodule needs to be able to compile in isolation. Illustratively, a separate compiler instance is run on each header file. This assumes that every header file should be able to compile on its own. \textit{Standalone} header files include what they use and are resilient to configuration macros.
 
@@ -201,60 +190,124 @@ CMSSW codebase had a lot of header files inaccuracies thoroughly described in th
 
 After sanitizing the header files a toolchain to protect regressions can be introduced. In CMSSW every header in a pull request is checked for the aforementioned issues. This is done by precompiling each header on its own. In future we will deploy the include graph sanitization tool which we used to detect include cycles~\cite{scram-cycle-break}.
 
-\subsection{Virtual Modulemap Overlay}
+\subsection{Modularizing External Dependencies}
 
+In order to fully see the expected performance benefits we should modularize external dependencies as well. An external dependency should be modularized if a module transitively includes it. For example if header \textit{A} from module \textit{Alpha} includes directly or indirectly \textit{$<$vector$>$}, the external library, \textit{libstdc++}, containing that file should be modularized.
+
+It can be challenging to modularize external dependencies. On the one hand it may be difficult to know what the modulemap file should contain. On the other hand because they can be in a non-writable locations on the file system. We have prepared a set of modulemap files for all external dependencies of CMSSW~\cite{raphael-auto-Modules}. The second challenge is solved a file which instructs rootcling to pretend that the modulemap file is located at the non-writable folder in the file system. The \textit{virtual file system overlay file (VFSOF} can be automatically synthesized by~\cite{raphael-auto-Modules}.
+
+\subsection{Automatic Generation of Modulemap Files and Virtual File System Overlays}
+
+% This section is probably the most important section in this paper, as all other experiments' librarian wants to know how they can modularize their software stack.
+
+% describe how scram generates modulemap here in deail. Also we can mention about classes.h
+As was mentioned in the section \ref{intro}, one of important features to be adjusted is generation modulemaps. Well-behaved header files are trivial to enumerate in the modulemap file (as illustrated in listing~\ref{list:modulemap}). When libraries contain many headers it may be laborious to enumerate them by hand especially if the directory structure is flat. The modulemap file syntax allows easy automation and most of its content can be generated by a build system.
+
+\begin{listing}[h]
+\noindent
+\begin{minipage}[h]{\textwidth}
+\begin{cppcode*}{linenos=false}
+module DataFormatsTrackerCommon_xr {
+  module "TrackerTopology" {header "DataFormats/TrackerCommon/interface/TrackerTopology.h" export *}
+  module "TrackerDetSide" {header "DataFormats/TrackerCommon/interface/TrackerDetSide.h" export *}
+  module "ClusterSummary" {header "DataFormats/TrackerCommon/interface/ClusterSummary.h" export *}
+
+  export *
+}
+\end{cppcode*}
+\end{minipage}
+\caption{An example of a C++ Module definition in the CMSSW modulemap file.}
+\label{list:modulemap}
+\end{listing}
+
+Autogeneration of modulemap in CMSSW is quite simple. The codebase has the library interface headers files in a separate folders. We automatically generate the modulemap by iterating through those interface headers. It is expected that the modulemap is generated at configuration time but it must be generated no later then the first invocation of \textit{rootcling}.
+
+The process of modularization subsumes external dependencies such as \textit{libc}, \textit{libstdc++} and \textit{libxml}. In most of the cases they are located in non-writable areas and modulemaps are impossible to add unless super user privileges are granted.  
 \begin{figure}[!h]
   \centering
   \begin{tikzpicture}[outer sep=0.05cm, node distance=0.8cm, scale=0.7, transform shape]
         
     \node[model, fill=my_lightblue, name=root] (root) {/};
-    \node[model, fill=my_lightblue, name=usr, left=1cm of root] (usr) {usr/};
-    \node[model, fill=my_lightblue, name=build, below=1cm of root] (build) {Build directory/};
-    \node[model, fill=my_lightblue, name=inc, below=1cm of build] (inc) {include/};
-    \node[model, fill=my_lightblue, name=somedir, below=1cm of inc] (somedir) {somedir/};
-    \node[model, fill=my_purple, name=headers, below=1cm of somedir] (headers) {*.h};
-    \node[model, fill=my_purple, name=stlmodmap, left=1cm of inc] (stlmodmap) {stl.modulemap};
-    \node[model, fill=my_purple, name=modmap, below=1cm of stlmodmap] (modmap) {module.modulemap};
-    \node[model, fill=my_purple, name=virtmap, right=1cm of inc] (virtmap) {Virtual Modulemap Overlay File (VMOF)};
+    \node[model, fill=my_lightblue, name=usr, below right = 3cm of root] (usr) {usr/};
+    \node[model, fill=my_lightblue, name=include, right = 2cm of usr] (include) {include/};
+    \node[model, fill=my_lightblue, name=cpp, right = 2cm of include] (cpp) {c++/};
+    \node[model, fill=my_lightblue, name=build, above right = 3cm of root] (build) {Build directory/};
+    \node[model, fill=my_lightblue, name=inc, right=2cm of build] (inc) {include/};
+    \node[model, fill=my_lightblue, name=somedir, right=2cm of inc] (somedir) {somedir/};
+    \node[model, fill=my_purple, name=headers, right = 1cm of somedir] (headers) {*.h};
+    \node[model, fill=my_purple, name=stlmodmap, below left = 2cm of inc] (stlmodmap) {stl.modulemap};
+    \node[model, fill=my_purple, name=libcmodmap, right = 1cm of stlmodmap] (libcmodmap) {libc.modulemap};    
+    \node[model, fill=my_purple, name=modmap, right=1cm of libcmodmap] (modmap) {module.modulemap};
+    \node[model, fill=my_purple, name=virtmap, above = 1cm of include] (virtmap) {VFSOF};
 
-    \draw[line, ->] (root.west) -- (usr);
-    \draw[line, ->] (root.south) -- (build);
-    \draw[line, ->] (build.south) -- (inc);
-    \draw[line, ->] (inc.south) -- (somedir);
-    \draw[line, ->] (somedir.south) -- (headers);
-    \draw[line, ->] (inc.west) -- (stlmodmap);
-    \draw[line, ->] (inc.west) -- (modmap);
-    \draw[line, ->] (inc.east) -- (virtmap);
-    
+
+    \draw[line, ->] (root.east) -- (usr);
+    \draw[line, ->] (usr.east) -- (include);
+    \draw[line, ->] (include.east) -- (cpp);
+    \draw[line, ->] (root.east) -- (build);
+    \draw[line, ->] (build.east) -- (inc);
+    \draw[line, ->] (inc.east) -- (somedir);
+    \draw[line, ->] (somedir.east) -- (headers);
+    \draw[line, ->] (inc.south) -- (stlmodmap);
+    \draw[line, ->] (inc.south) -- (modmap);
+    \draw[line, ->] (inc.south) -- (libcmodmap);
+    \draw[dashedline, ->] (libcmodmap.south) -- (virtmap);
+    \draw[dashedline, ->] (stlmodmap.south) -- (virtmap);
+    \draw[dashedline, ->] (virtmap.south) -- (include);
+    \draw[dashedline, ->] (virtmap.south) -- (cpp);
+
   \end{tikzpicture}
-  \caption{Modulemap infrastructure for ROOT and CMSSW.}
+  \caption{Modulemap directory physical vs virtual structure.}
   \label{fig:modulemap}
 \end{figure}
 
 % FIXME!: put diagram for module maps here
-Let’s take a closer look to module map system. In the diagram \ref{fig:modulemap} is shown organization of C++ Modules infrastructure together with module map system. Here circles corresponds to directories and squares corresponds to files. Imagine the top circle means root directory. As said, module map file needs to be placed where the header files exist. So in this example, it needs to know where the *.h header files exist.
+Diagram \ref{fig:modulemap} shows the organization of C++ Modules infrastructure together with module map system. Blue rectangles describe the physical directories, purple rectangles physical files. Black thick arrows denote physical files. Dashed lines show the virtual file system relationship.
 
-However, there is some problems in module map system.  For example, we want to enable C++ Modules for system headers. It means that for system headers, for example \textit{STL} and \textit{libc} module maps don’t exist by default. Thus we need to provide module map by ourselves. Module map system itself does not solve this complex situation, that’s why we need to introduce module map overlay file.
+Modulemap files for libc and stl (libstdc++) need to be present in \textit{/usr/include} and \textit{/usr/include/c++} respectively. Listing~\ref{list:vfsof} illustrates how the VFSOF instructs the infrastructure to consider \textit{libc.modulemap} and \textit{stl.modulemap} as if they were physically present in the expected folders. This approach allows us to "mount" modulemap files anywhere on the system enabling full software stack modularization.
 
-Module map overlay file is generated at the configuration time and gives Clang the important information of the location of system headers and the relative path to \textit{stl} module map. System module maps, for example the \textit{stl} module map has a similar contents as \textit{module.modulemap}. From modulemap overlay file and \textit{stl.modulemap}, Clang combines those information and treat internally as it is modulemap existing in \textit{usr/include}. However, it also has the downside that it needs to be generated at the configuration time.
+\begin{listing}[h]
+\noindent
+\begin{minipage}[h]{\textwidth}
+\begin{cppcode*}{linenos=false}
+{
+  'version': 0,
+  'roots': [
+    { 'name': '/usr/include/c++/', 'type': 'directory',
+      'contents': [
+        { 'name': 'module.modulemap', 'type': 'file',
+          'external-contents': '/Build directory/include/stl.modulemap'
+        }
+      ]
+    },
+    { 'name': '/usr/include/', 'type': 'directory',
+      'contents': [
+        { 'name': 'module.modulemap', 'type': 'file',
+          'external-contents': '/Build directory/include/libc.modulemap'
+        }
+      ]
+    }
+  ]
+}
+\end{cppcode*}
+\end{minipage}
+\caption{An example of a VFSOF for libc.modulemap and stl.modulemap.}
+\label{list:vfsof}
+\end{listing}
+
 
 % FIXME!!: Why there is no virtual modulemap overlay?
 
-\subsection{Modularizing External Dependencies}
 
-In order to fully see the expected performance benefits we should modularize external dependencies as well. An external dependency should be modularized if a module transitively includes it. For example if header \textit{A} from module \textit{Alpha} includes directly or indirectly \textit{$<$vector$>$}, the external library, \textit{libstdc++}, containing that file should be modularized.
-
-It can be challenging to modularize external dependencies. On the one hand it may be difficult to know what the modulemap file should contain. On the other hand because they can be in a non-writable locations on the file system. We have prepared a set of modulemap files for all external dependencies of CMSSW~\cite{raphael-auto-Modules}. The second challenge is solved a file which instructs rootcling to pretend that the modulemap file is located at the non-writable folder in the file system. The \textit{virtual file system overlay file} can be automatically synthesized by~\cite{raphael-auto-Modules}.
-
-
-\section{Preliminary Results}
+\section{Results}
 \label{results}
-FIXME: Explain we are still running in mixed mode.
-In \ref{fig:perf:a},\ref{fig:perf:b},\ref{fig:perf:c} and \ref{fig:perf:d} are shown results of benchmarks from CMSSW testing suite with enabled C++ Modules. On \ref{fig:perf:a} is shown a benchmark of ESetup Lock in Fast simulation test. ESetup is auxiliary information needed to process an Event. The left bar is ROOT Master, with no Modules. The middle bar is a ROOT with only ROOT PCMs, which means that we're not loading PCMs from CMSSW in this build. The right bar is ROOT PCMs + CMS PCMs, which is loading 121 PCMs in total. As you can see, CMS PCMs build runs 22.5 seconds better than ROOT Master.
 
-\ref{fig:perf:b} is shown results of benchmark of ESetup Get in Fast simulation test. In this test, CMS PCMs build was 15.2 seconds fater than ROOT Master.
-\ref{fig:perf:c} is shown results of benchmark of CPU Total Loop in Digitization test. CMS PCMs build was 331 seconds faster than ROOT Master.
-\ref{fig:perf:d} is shown results of benchmark of RSS in Digitization test. CMS PCMs build had 143 MBytes worse RSS than ROOT Master.
+We conducted a performance study to assess the impact of this technology. The study was conducted on CMSSW build server, where all the CMS software is built and tested every day. As CMSSW is large and there exist huge variation of possible physics workflows, we measured a realistic CMS workflow tests which were expected to represent the actual code that physicists would run for their analysis.
+
+Figure \ref{fig:performance1} shows the benchmark of CPU time and memory. In each subfigure, ROOT Master is CMSSW built without C++ Modules. ROOT PCMs is the build where ROOT is using C++ Modules and is loading 60? libraries, but CMSSW itself don't have C++ Modules. CMS PCMs is the configuration where CMSSW also generates PCM for itself, and is loading 90? PCMs in total.
+
+Figure \ref{fig:perf:a} and \ref{fig:perf:b} show a benchmark of ESetup in Fast simulation test. ESetup is auxiliary information needed to process an Event, and is essentially one of the workloads of CMS initialization process. Figure \ref{fig:perf:c} shows the result of CPU Total Loop in Digitization test.
+\ref{fig:perf:d} is shown results of benchmark of RSS in Digitization test.
 
 \begin{figure}
 \centering
@@ -270,21 +323,16 @@ In \ref{fig:perf:a},\ref{fig:perf:b},\ref{fig:perf:c} and \ref{fig:perf:d} are s
 \begin{minipage}{.48\textwidth}
 \subfloat[] {\label{fig:perf:d} \includegraphics[width=\textwidth]{3.png}}
  \end{minipage}
- \caption{Performance results: (a) is the ESetup Lock RT time measurements. (b) is showing the ESetup RT  measurements. (c) is showing the 250199.18 CPU total loop measurements. (d) is showing the 500199.0 RSS measurements.}
+ \caption{Performance results: (a) shows ESetup Lock RT measurement for the fast simulation test. (b) shows ESetup Get RT measurement for the fast simulation test. (c) shows CPU total loop measurement for TTbar reconstruction test. (d) is showing the RSS measurement for TTbar reconstruction test.}
 \label{fig:performance1}
 \end{figure}
  
- The work presented in this article shows that C++ Modules technology were successfully implemented and tested in ROOT and CMSSW software framework. The work on performance improvement is still ongoing. C++ Modules will provide experiments a benefit of header modularity of libraries and performance improvement.
+%The work presented in this article shows that C++ Modules technology were successfully implemented and tested in ROOT and CMSSW software framework. The work on performance improvement is still ongoing. C++ Modules will provide experiments a benefit of header modularity of libraries and performance improvement.
 
-\section{Limitations and Future work}
-% TODO: Not all CMS libraries were modularized?:
-\begin{enumerate}
-    \item Incremental builds -- building ROOT, modifying the source code and rebuilding might not work. To work around it remove all PCM files in the build folder.
-    \item Relocatability issues -- we have fixed a few of the relocatability issues we found. We are aware of an obscure relocatability issue when ROOT is copied in another folder and we are rebuild. ROOT picks up both modulemap files in seemingly distinct locations.
-    \item Building PCMs with rootcling -- in rare cases there might be issues when building PCM files with rootcling. The easiest will be to open a bug report to clang, however, reproducing a failure outside of rootcling is very difficult at the moment.
-    \item Generation of some dictionary hangs -- on some platforms (depending on the version of libstdc++) the generation of the dictionary goes in an infinite loop. 
-    \item Layering violations in some ROOT components.
-\end{enumerate}
+\section{Conclusion}
+We have shown the current advancements in the modularization of the CMSSW codebase. Despite of the partial migration we observed promising performance improvements. We are working towards modularization of the rest of the CMSSW components and external dependencies. We have implemented a set of tools to aid this process and we do not expect significant blockers.
+
+We are working on a further memory footprint reductions by avoiding preloading of all modules at startup time. This requires global module content indexing and loading the corresponding modules on demand. We expect more sophisticated benchmarking to be done improving the coverage of many more workflows.
 
 
 \section{Acknowledgments}
