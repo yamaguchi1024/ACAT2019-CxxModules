@@ -81,19 +81,19 @@
 \ead{[1] yukatkh@is.s.u-tokyo.ac.jp, [2] oksana.shadura@cern.ch, [3] vvassilev@cern.ch}
 
 \begin{abstract}
-ROOT has several features which interact with libraries and require implicit header inclusion. This can be triggered by reading or writing data on disk, or user actions at the prompt. Often, the headers are immutable and reparsing is redundant. C++ Modules are designed to minimize the reparsing of the same header content by providing an efficient on-disk representation of C++ Code. ROOT has released a C++ Modules-aware technology preview which intends to become the default for the next release.
+ROOT has several features which interact with libraries and require implicit header inclusion. This can be triggered by reading or writing data on disk, or user actions at the prompt. Often, the headers are immutable, and reparsing is redundant. C++ Modules are designed to minimize the reparsing of the same header content by providing an efficient on-disk representation of C++ Code. ROOT has released a C++ Modules-aware technology preview which intends to become the default for the next release.
 
-In this paper, we will summarize our experience with migrating C++ Modules to LHC experiment's software code bases. We outline the challenges in C++ Modules migration of the CMS software, including integration of C++ Modules support in CMS build system. We also evaluate the performance benefits that experiments are expected to achieve.
+In this paper, we will summarize our experience with migrating C++ Modules to LHC experiment's software code bases. We outline the challenges in C++ Modules migration of the CMS software, including the integration of C++ Modules support in CMS build system. We also evaluate the performance benefits that experiments are expected to achieve.
 \end{abstract}
 
 \section{Introduction}
 \label{intro}
 
-In High Energy Physics (HEP), experiments such as LHC \cite{lhc} produces a large amount of data each seconds, and we expect to have even more data in Hi-lumi LHC \cite{hilumi} era. Thus software for HEP are always striving to archive the better performance, which will result in the reduction of costs in data centers as well as easing physicists waiting for their job to be processed.
+In High Energy Physics (HEP), experiments such as LHC \cite{lhc} produces a large amount of data each second, and we expect to have even more data in Hi-Lumi LHC \cite{hilumi} era. Thus software for HEP is always striving to archive the better performance, which will result in the reduction of costs in data centers as well as easing physicists waiting for their job to be processed.
 
-ROOT~\cite{root} is a core software used in High Energy Physics (HEP) not only for data analysis, but also as a backend for larger LHC experiment's software such as CMSSW and ATLAS. Thus the performance improvement in ROOT will result in also improving experiment's software, which requires more resources than ROOT itself.
+ROOT~\cite{root} is a core software used in High Energy Physics (HEP) not only for data analysis but also as a backend for larger LHC experiment's software such as CMSSW and ATLAS. Thus the performance improvement in ROOT will result in also improving experiment's software, which requires more resources than ROOT itself.
 
-C++ Modules \cite{vassil-paper} has been supported in ROOT since version 6.16, in order to improve its performance. The cost of header re-parsing can be negligible in small to medium size codebases, but can be  high in larger codebases. Usually, the scalability issues arise at compile-time and do not affect the programs at runtime. However, ROOT is different -- its C++ interpreter Cling processes code at program execution time and avoidance of redundant content re-parsing yields better runtime performance.
+C++ Modules \cite{vassil-paper} has been supported in ROOT since version 6.16, in order to improve its performance. The cost of header re-parsing can be negligible in small to medium size codebases, but can be critical in larger codebases. Usually, the scalability issues arise at compile-time and do not affect the programs at runtime. However, ROOT is different -- its C++ interpreter Cling[FIXME: cite cling] processes code at program execution time and avoidance of redundant content re-parsing yield better runtime performance.
 
 \section{Background}
 
@@ -302,9 +302,9 @@ Modulemap files for libc and stl (libstdc++) need to be present in \textit{/usr/
 \section{Preliminary Performance Results}
 \label{results}
 
-The mixed run mode in ROOT allows us to make partial performance studies to assess the impact of this technology. The study was conducted on CMSSW build server, where all the CMS software is continuously integrated. As CMSSW is large and there exist huge variation of possible physics workflows, we measured a realistic CMS workflow tests which were expected to represent the actual code that physicists would run for their analysis.
+The mixed run mode in ROOT allows us to make partial performance studies to assess the impact of this technology. The performance study was conducted on CMSSW build server, where all the CMS software is continuously integrated. As CMSSW is large and there exist huge variation of possible physics workflows, we measured a realistic CMS workflow tests which were expected to represent the actual code that physicists would run for their analysis.
 
-Figure \ref{fig:performance1} shows the benchmark of CPU time and memory footprint. On every plot, CMSSW is built without C++ Modules (\textit{ROOT Master} as baseline. \textit{ROOT PCMs} is CMSSW built with ROOT only using its own C++ Modules (around 80) and other libraries don't have C++ Modules. \textit{CMS PCMs} is the configuration where ROOT and CMSSW runs with C++ Modules (around 90 due to the incomplete modularization).
+Figure \ref{fig:performance1} shows the benchmark of CPU time and memory footprint. On every plot, CMSSW is built without C++ Modules, \textit{ROOT Master} as a baseline. \textit{ROOT PCMs} is CMSSW built with ROOT only using its own C++ Modules with 96 pcms, and other libraries don't have C++ Modules. \textit{CMS PCMs} is the configuration where ROOT and CMSSW run with C++ Modules with 121 pcms. Although CMSSW has over 200 libraries, we have modularized 25 out of them at this point of the study.
 
 \begin{figure}[h]
 \centering
@@ -320,20 +320,16 @@ Figure \ref{fig:performance1} shows the benchmark of CPU time and memory footpri
 \begin{minipage}{.48\textwidth}
 \subfloat[] {\label{fig:perf:d} \includegraphics[width=\textwidth]{3.png}}
  \end{minipage}
- \caption{Performance results: (a) shows ESetup Lock RT measurement for the fast simulation test. (b) shows ESetup Get RT measurement for the fast simulation test. (c) shows CPU total loop measurement for TTbar reconstruction test. (d) is showing the RSS measurement for TTbar reconstruction test.}
+ \caption{Performance results: (a) shows ESetup Lock RT measurement for the fast simulation test. (b) shows ESetup Get RT measurement for the fast simulation test. (c) shows CPU total loop measurement for TTbar reconstruction test. (d) shows the RSS measurement for TTbar reconstruction test.}
 \label{fig:performance1}
 \end{figure}
 
-Figure \ref{fig:perf:a}, \ref{fig:perf:b}, \ref{fig:perf:c} and \ref{fig:perf:d} do not show the expected improvements, however, they show no performance degradation which was the intent of the study at that stage of modularization. We miss performance improvement opportunities mainly due to two reasons: the incomplete modularization; and the preloading of all modules at startup time in sparse workflows.
- 
- 
-%The work presented in this article shows that C++ Modules technology were successfully implemented and tested in ROOT and CMSSW software framework. The work on performance improvement is still ongoing. C++ Modules will provide experiments a benefit of header modularity of libraries and performance improvement.
+Figure \ref{fig:perf:a}, \ref{fig:perf:b}, \ref{fig:perf:c} and \ref{fig:perf:d} do not show the expected improvements. However, they show no performance degradation, which was the intent of the study at that stage of modularization. We miss performance improvement opportunities mainly due to two reasons: the incomplete modularization; and the preloading of all modules at startup time in sparse workflows.
 
 \section{Conclusion}
-We have shown the current advancements in the modularization of the CMSSW codebase. Despite of the partial migration we observed promising performance improvements. We are working towards modularization of the rest of the CMSSW components and external dependencies. We have implemented a set of tools to aid this process and we do not expect significant blockers.
+We have shown the current advancements in the modularization of the CMSSW codebase. Despite the partial migration, we observed promising performance improvements. We are working towards modularization of the rest of the CMSSW components and external dependencies. We have implemented a set of tools to aid this process, and we do not expect significant blockers.
 
-We are working on a further memory footprint reductions by avoiding preloading of all modules at startup time. This requires global module content indexing and loading the corresponding modules on demand. We expect more sophisticated benchmarking to be done improving the coverage of many more workflows.
-
+We are working on a further memory footprint reductions by avoiding preloading of all modules at startup time. It requires global module content indexing and loading the corresponding modules on demand. We expect more sophisticated benchmarking to be done, improving the coverage of many more workflows.
 
 \section{Acknowledgments}
 \label{ack}
