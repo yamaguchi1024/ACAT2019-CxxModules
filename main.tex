@@ -174,7 +174,7 @@ After sanitizing the header files a toolchain to protect regressions can be intr
 
 In order to fully see the expected performance benefits, we should modularize external dependencies as well. An external dependency should be modularized if a module transitively includes it. For example if header \textit{A} from module \textit{Alpha} includes directly or indirectly \textit{$<$vector$>$}, the external library, \textit{libstdc++}, containing that file should be modularized.
 
-It can be challenging to modularize external dependencies. On the one hand it may be difficult to know what the modulemap file should contain. On the other hand because they can be in a non-writable locations on the file system. We have prepared a set of modulemap files for all external dependencies of CMSSW~\cite{raphael-auto-Modules}. The second challenge is solved a file which instructs rootcling to pretend that the modulemap file is located at the non-writable folder in the file system. The \textit{virtual file system overlay file (VFSOF} is programatically synthesized by Cling.
+It can be challenging to modularize external dependencies. On one hand, it may be difficult to know what the modulemap file should contain. On the other hand, because they can be in non-writable locations on the file system. We have prepared a set of modulemap files for all external dependencies of CMSSW~\cite{raphael-auto-Modules}. The second challenge is solved by a file which instructs rootcling to pretend that the modulemap file is located at the non-writable folder in the file system. The \textit{virtual file system overlay file (VFSOF} is programmatically synthesized by Cling.
 
 \subsection{Automatic Generation of Modulemap Files and Virtual File System Overlay File}
 \label{autogen}
@@ -263,7 +263,7 @@ Figure \ref{fig:modulemap} shows the organization of C++ Modules infrastructure 
 
 Modulemap files for libc and stl (libstdc++) need to be present in \textit{/usr/include} and \textit{/usr/include/c++} respectively. Listing~\ref{list:vfsof} illustrates how the VFSOF instructs the infrastructure to consider \textit{libc.modulemap} and \textit{stl.modulemap} as if they were physically present in the expected folders. This approach allows us to "mount" modulemap files anywhere on the system enabling full software stack modularization.
 
-The pre-configured VFSOF did not match the deployment process of CMSSW due to its static nature. The PCMs became non-relocatable from build directory as the path was hardcoded to PCMs. A more dynamic, on-memory representation of VFSOF was introduced to solve the problem. As it is a flexible virtual file on memory, paths do not need to be hardcoded at configuration time, and thus it can determine header paths at runtime after the binary was distributed.
+The pre-configured VFSOF did not match the deployment process of CMSSW due to its static nature. The PCMs became non-relocatable from build directory as the path was hardcoded to PCMs. A more dynamic, on-memory representation of VFSOF was introduced to solve the problem. As it is a flexible virtual file on memory, paths do not need to be hardcoded at the configuration time, and thus it can determine header paths at runtime after the binary was distributed.
 
 \section{Preliminary Performance Results}
 \label{results}
